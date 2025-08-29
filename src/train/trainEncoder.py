@@ -12,13 +12,10 @@ from torch.optim import Adam
 # path trick
 path = os.path.normpath(os.path.join(os.path.abspath(__file__), '..', '..'))
 sys.path.append(path)
-from util import learnable_parameters, model_size, plot_curves, balance_weights
-from model.classifiers import MultiClassifier, mimic_classifier_list
-from data.mimic_dataset import MimicDataset
-from llava.mm_utils import get_model_name_from_path, process_images
-from encoder import get_encoder, lora, unfreeze_stages
-from mapper import create_mapper
 
+mimic_classifier_list = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema', 'Enlarged Cardiomediastinum',
+                         'Fracture', 'Lung Lesion', 'Lung Opacity', 'Pleural Effusion', 'Pleural Other',
+                         'Pneumonia', 'Pneumothorax', 'Support Devices']
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train encoder')
@@ -53,12 +50,10 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
     logging.info('device: {}'.format(device))
     logging.info('Loading data...')
-    train_data = MimicDataset(args.root_dir, args.annotation, zeroed=True if args.output_classes == 3 else False)
-    val_data = MimicDataset(args.root_dir, args.annotation.replace('train', 'dev'), zeroed=True if args.output_classes == 3 else False)
     classifiers_names = mimic_classifier_list
 
-    train_dataloader = train_data.get_loader(args.batch_size)
-    val_dataloader = val_data.get_loader(args.batch_size)
+    train_dataloader = train_data.get_loader(args.batch_size, True)
+    val_dataloader = val_data.get_loader(args.batch_size, True)
 
     # class weights
     weights = balance_weights(args.annotation, mimic_classifier_list, args.output_classes)

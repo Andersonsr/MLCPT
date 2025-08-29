@@ -1,6 +1,10 @@
 import torch
 from torch import nn
 
+mimic_classifier_list = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema', 'Enlarged Cardiomediastinum',
+                         'Fracture', 'Lung Lesion', 'Lung Opacity', 'Pleural Effusion', 'Pleural Other',
+                         'Pneumonia', 'Pneumothorax', 'Support Devices']
+
 
 class LinearClassifier(nn.Module):
     def __init__(self, input_size, output_classes):

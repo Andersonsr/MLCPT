@@ -1,4 +1,3 @@
-import argparse
 import torch
 import os
 import sys
@@ -10,7 +9,7 @@ from peft import LoraConfig, get_peft_model
 # path trick
 path = os.path.normpath(os.path.join(os.path.join(os.path.abspath(__file__)), '..', '..'))
 sys.path.append(path)
-from util import learnable_parameters, DatasetsClassDict
+from util import learnable_parameters
 from model.mapper import create_mapper
 
 logger = logging.getLogger('captioning')
@@ -28,7 +27,7 @@ class Decoder(nn.Module):
         if 'opt' in model_name:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                torch_dtype=precision,
+                dtype=precision,
             )
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
             self.ignore_id = -100
@@ -36,7 +35,7 @@ class Decoder(nn.Module):
         elif 'llama' in model_name:
             assert 'HF_TOKEN' in os.environ.keys(), 'HF_TOKEN environment variable not set'
             # login(token=os.environ['HF_TOKEN'])
-            self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=precision)
+            self.model = AutoModelForCausalLM.from_pretrained(model_name, dtype=precision)
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
 
             # <|eot_id|> = 128009, <|end_of_text|> = 128001
@@ -55,7 +54,7 @@ class Decoder(nn.Module):
         self.hidden_size = self._get_hidden_size()
         self.prefix_length = prefix_length
         self.fp = precision
-        self.mapper = create_mapper(input_dimension, self.hidden_size, ).to(dtype=precision)
+        self.mapper = create_mapper(input_dimension, self.hidden_size, prefix_length).to(dtype=precision)
 
         logging.debug(f'hidden size: {self.hidden_size}')
         logging.debug(f'BOS token id: {self.tokenizer.bos_token_id}')
@@ -111,9 +110,7 @@ class Decoder(nn.Module):
         logging.debug(f'Generated ids: {generated_ids}')
         return self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 
-    def forward(self, batch):
-        embeddings = batch['embeddings'].to(dtype=self.fp)
-        captions = batch['captions']
+    def forward(self, embeddings, captions):
         logging.debug(f'input embeddings shape: {embeddings.shape}')
         if self.add_noise:
             embeddings = self.noise_injection(embeddings)
@@ -121,15 +118,13 @@ class Decoder(nn.Module):
             embeddings = embeddings.to(self.device)
 
         embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
-
         captions = [caption + self.tokenizer.eos_token for caption in captions]
 
         # batch size, patches, model dim
-        b, p, d = embeddings.shape
-        embeddings = embeddings.view(b*p, 1, d)
+        b, d = embeddings.shape
 
         prefix_tokens = self.mapper(embeddings).view(-1, self.prefix_length, self.hidden_size)
-        prefix_tokens = prefix_tokens.view(b, p*self.prefix_length, self.hidden_size)
+        prefix_tokens = prefix_tokens.view(b, self.prefix_length, self.hidden_size)
 
         logging.debug(f'Mapper output: {prefix_tokens.shape}')
 
@@ -156,7 +151,7 @@ class Decoder(nn.Module):
         labels[labels == self.tokenizer.pad_token_id] = self.ignore_id
 
         # ignore prefix, set labels to skip prefix during loss computation
-        ignore_size = self.prefix_length*p
+        ignore_size = self.prefix_length
         ignore = torch.ones(input_emb.shape[0],  ignore_size) * self.ignore_id
         logging.debug('ignore shape: {}'.format(ignore.shape))
 
