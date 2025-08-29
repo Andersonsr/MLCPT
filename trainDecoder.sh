@@ -9,4 +9,4 @@ python src/train/trainDecoder.py \
     --encoder_name facebook/dinov2-base \
     --frozen_encoder \
     --logging_steps 10 \
-
+    --dataset_root E:/datasets/coco_2017

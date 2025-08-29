@@ -20,24 +20,6 @@ from util import learnable_parameters
 
 
 def train(args):
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info('model device {}'.format(device))
-    # data
-    num_captions = 1
-    dataset = getattr(args, 'dataset', None)
-
-    if dataset == 'coco':
-        val_data = CocoCaptions('E:/datasets/coco_2017/annotations/captions_val2017.json',
-                                  'E:/datasets/coco_2017/',
-                                  'val')
-        train_data = CocoCaptions('E:/datasets/coco_2017/annotations/captions_train2017.json',
-                                  'E:/datasets/coco_2017/',
-                                  'train')
-
-    logging.debug('training dataset size: %d' % len(train_data))
-    logging.debug('validation dataset size: %d' % len(val_data))
-
     batch_size = getattr(args, 'batch_size')
     decoder_name = getattr(args, 'decoder_name')
     prefix_len = getattr(args, 'prefix_length')
@@ -55,6 +37,22 @@ def train(args):
     save_history = getattr(args, 'save_history')
     dataset = getattr(args, 'dataset')
     frozen_encoder = getattr(args, 'frozen_encoder')
+    dataset_root = getattr(args, 'dataset_root')
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info('model device {}'.format(device))
+    # data
+
+    if dataset == 'coco':
+        val_data = CocoCaptions(f'{dataset_root}/annotations/captions_val2017.json',
+                                  dataset_root,
+                                  'val')
+        train_data = CocoCaptions(f'{dataset_root}/annotations/captions_train2017.json',
+                                  dataset_root,
+                                  'train')
+
+    logging.debug('training dataset size: %d' % len(train_data))
+    logging.debug('validation dataset size: %d' % len(val_data))
 
     train_loader = train_data.get_loader(batch_size=batch_size, shuffle=True)
     val_loader = val_data.get_loader(batch_size=batch_size, shuffle=True)
@@ -184,6 +182,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', help='debug mode', default=False)
     parser.add_argument('--dtype', type=str, default='fp32', choices=['fp32', 'fp16'], help='data type')
     parser.add_argument('--frozen_encoder', action='store_true', help='frozen encoder', default=False)
+    parser.add_argument('--dataset_root', type=str, required=True)
 
     args = parser.parse_args()
     logger = logging.getLogger('captioning')
