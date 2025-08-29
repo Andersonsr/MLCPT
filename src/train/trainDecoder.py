@@ -114,24 +114,24 @@ def train(args):
                 with torch.no_grad():
                     # noise may be used during training
                     decoder.add_noise = False
-                    # for val_batch in val_loader:
-                    #     # validate using text embeddings in text only training
-                    #     flag = True if dataset == 'petro-txt' else False
-                    #     logging.debug(f'validation using text embedding? {flag}')
-                    #
-                    #     with torch.no_grad():
-                    #         embeddings = encoder(val_batch['image'])
-                    #         val_output = decoder(embeddings, val_batch['caption'])
-                    #         log_val_losses.append(val_output.loss.detach().cpu().item())
+                    for val_batch in val_loader:
+                        # validate using text embeddings in text only training
+                        flag = True if dataset == 'petro-txt' else False
+                        logging.debug(f'validation using text embedding? {flag}')
+
+                        with torch.no_grad():
+                            embeddings = encoder(val_batch['image'])
+                            val_output = decoder(embeddings, val_batch['caption'])
+                            log_val_losses.append(val_output.loss.detach().cpu().item())
 
                 # save step loss and clean list
-                # validation_losses.append(sum(log_val_losses) / len(log_val_losses))
+                validation_losses.append(sum(log_val_losses) / len(log_val_losses))
                 training_losses.append(sum(log_loss) / len(log_loss))
                 log_loss = []
 
                 # plot and save loss history
                 plt.plot(range(len(training_losses)), training_losses, label='training')
-                # plt.plot(range(len(validation_losses)), validation_losses, label='validation')
+                plt.plot(range(len(validation_losses)), validation_losses, label='validation')
                 plt.legend()
                 plt.xlabel('step')
                 plt.ylabel('loss')
