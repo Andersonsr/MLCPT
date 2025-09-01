@@ -11,13 +11,17 @@ sys.path.append(path)
 
 
 class Encoder(nn.Module):
-    def __init__(self, model_name, dataset, build_head):
+    def __init__(self, model_name, build_head, trainable, device, dataset=None):
         super(Encoder, self).__init__()
         self.vision_preprocess = AutoImageProcessor.from_pretrained(model_name)
         self.mapper = None
         self.backbone = AutoModel.from_pretrained(
             model_name
         )
+        self.device = device
+        self.backbone.to(device)
+        self.trainable = trainable
+
         if 'dinov2' in model_name:
             self.dim = self.backbone.embeddings.patch_embeddings.projection.weight.size()[0]
 
@@ -34,23 +38,21 @@ class Encoder(nn.Module):
             elif dataset == 'coco':
                 self.classifiers = MultiClassifier(mimic_classifier_list, self.dim, 2)
 
-    def forward(self, x, trainable=True):
+            self.classifiers.to(self.device)
+
+    def forward(self, x):
         x = self.preprocess(x)
-        if trainable:
-            x = self.backbone(**x)
+        if self.trainable:
+            x = self.backbone(**x.to(self.device))
 
         else:
             with torch.no_grad():
-                x = self.backbone(**x)
+                x = self.backbone(**x.to(self.device))
 
         if hasattr(self, 'classifiers'):
             return self.classifiers(x.pooler_output)
 
         return x.pooler_output
-
-    def encode(self, image):
-        output = self.backbone(**self.preprocess(image))
-        return output.pooler_output
 
     def preprocess(self, image):
         if type(image) is str:

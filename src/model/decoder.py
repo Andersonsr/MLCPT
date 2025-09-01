@@ -1,3 +1,4 @@
+import argparse
 import torch
 import os
 import sys
@@ -10,7 +11,7 @@ from peft import LoraConfig, get_peft_model
 path = os.path.normpath(os.path.join(os.path.join(os.path.abspath(__file__)), '..', '..'))
 sys.path.append(path)
 from util import learnable_parameters
-from model.mapper import create_mapper
+from model.mapper import CapinchoMapper as Mapper
 
 logger = logging.getLogger('captioning')
 # for key in os.environ.keys():
@@ -19,15 +20,16 @@ logger = logging.getLogger('captioning')
 
 class Decoder(nn.Module):
     def __init__(self, model_name, device, precision=torch.float16, prefix_length=10, add_noise=False, variance=0.016,
-                 input_dimension=768):
+                 input_dimension=768, normalize=False, prefix_before_bos=False, append_eos=False):
         super(Decoder, self).__init__()
         self.device = device
+        self.before_bos = prefix_before_bos
         self.precision = precision
 
         if 'opt' in model_name:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                dtype=precision,
+                torch_dtype=precision,
             )
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
             self.ignore_id = -100
@@ -35,7 +37,7 @@ class Decoder(nn.Module):
         elif 'llama' in model_name:
             assert 'HF_TOKEN' in os.environ.keys(), 'HF_TOKEN environment variable not set'
             # login(token=os.environ['HF_TOKEN'])
-            self.model = AutoModelForCausalLM.from_pretrained(model_name, dtype=precision)
+            self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=precision)
             self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
 
             # <|eot_id|> = 128009, <|end_of_text|> = 128001
@@ -49,12 +51,14 @@ class Decoder(nn.Module):
         else:
             raise ValueError(f'{model_name} not supported')
 
+        self.append_eos = append_eos
         self.add_noise = add_noise
         self.variance = variance
         self.hidden_size = self._get_hidden_size()
         self.prefix_length = prefix_length
         self.fp = precision
-        self.mapper = create_mapper(input_dimension, self.hidden_size, prefix_length).to(dtype=precision)
+        self.mapper = Mapper(input_dimension, self.hidden_size, self.prefix_length).to(dtype=precision)
+        self.normalize = normalize
 
         logging.debug(f'hidden size: {self.hidden_size}')
         logging.debug(f'BOS token id: {self.tokenizer.bos_token_id}')
@@ -88,12 +92,9 @@ class Decoder(nn.Module):
         embeddings_layer = self.model.get_input_embeddings()
         bos_embeddings = embeddings_layer(bos_token)
 
+        prefix = torch.concat([bos_embeddings, prefix], dim=1)
 
-        prefix = torch.concat([prefix, bos_embeddings], dim=1)
-
-        attention_mask = torch.ones((prefix.shape[0], prefix.shape[1])).to(self.device, dtype=torch.long)
-        # print('ATTENTION SHAPE', attention_mask.shape)
-
+        # attention_mask = torch.ones((prefix.shape[0], prefix.shape[1])).to(self.device, dtype=torch.long)
         logging.debug(f'decoder input shape: {prefix.shape}')
         attention_mask = torch.ones(prefix.shape[:2]).to(self.device, dtype=self.precision)
         generated_ids = self.model.generate(do_sample=do_sample,
@@ -111,20 +112,20 @@ class Decoder(nn.Module):
         return self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 
     def forward(self, embeddings, captions):
+        embeddings = embeddings.to(dtype=self.fp)
         logging.debug(f'input embeddings shape: {embeddings.shape}')
         if self.add_noise:
             embeddings = self.noise_injection(embeddings)
-        if self.device:
-            embeddings = embeddings.to(self.device)
 
         embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
         captions = [caption + self.tokenizer.eos_token for caption in captions]
 
         # batch size, patches, model dim
-        b, d = embeddings.shape
+        b, p, d = embeddings.shape
+        embeddings = embeddings.view(b*p, 1, d)
 
         prefix_tokens = self.mapper(embeddings).view(-1, self.prefix_length, self.hidden_size)
-        prefix_tokens = prefix_tokens.view(b, self.prefix_length, self.hidden_size)
+        prefix_tokens = prefix_tokens.view(b, p*self.prefix_length, self.hidden_size)
 
         logging.debug(f'Mapper output: {prefix_tokens.shape}')
 
@@ -138,7 +139,7 @@ class Decoder(nn.Module):
             logging.debug(f' captions embeddings unsqueeze shape: {captions_emb.shape}')
 
         # final shape [batch, sos + prefix + caption len-1, d_model]
-        input_emb = torch.concat([prefix_tokens, captions_emb], dim=1).to(self.fp)
+        input_emb = torch.concat([captions_emb[:, :1, :], prefix_tokens, captions_emb[:, 1:, :]], dim=1).to(self.fp)
 
         # labels for auto regressive CE training
         labels = self.tokenizer(captions, return_tensors="pt", padding=True).input_ids.to(self.device, dtype=self.fp)
@@ -151,7 +152,7 @@ class Decoder(nn.Module):
         labels[labels == self.tokenizer.pad_token_id] = self.ignore_id
 
         # ignore prefix, set labels to skip prefix during loss computation
-        ignore_size = self.prefix_length
+        ignore_size = self.prefix_length*p
         ignore = torch.ones(input_emb.shape[0],  ignore_size) * self.ignore_id
         logging.debug('ignore shape: {}'.format(ignore.shape))
 
@@ -159,7 +160,8 @@ class Decoder(nn.Module):
         ignore = ignore.to(self.device)
         input_emb = input_emb.to(self.device)
         # concatenate prefix labels (ignore) and text labels
-        labels = torch.concat([ignore, labels], dim=1)
+        labels = torch.concat([labels[:, :1], ignore, labels[:, 1:]], dim=1)
+
         logging.debug('final labels shape: {}'.format(labels.shape))
         return self.model(inputs_embeds=input_emb, labels=labels.to(torch.long))
 
@@ -196,16 +198,25 @@ class Decoder(nn.Module):
         )
         self.model = get_peft_model(self.model, config).to(self.fp)
 
+    def load_decoder(self, path):
+        raise NotImplementedError()
 
+
+# utility function
 def model_from_json(json_file, device):
     import json
     import os
     config = json.load(open(json_file, 'r'))
 
     precision = torch.float16 if config['fp'] == 'fp16' else torch.float32
+    before_bos = config['before_bos'] if 'before_bos' in config else False
+    append_eos = config['append_eos'] if 'append_eos' in config else False
+
+    normalize = config['normalize'] if 'normalize' in config else False
     # do not add noise during eval
     decoder = Decoder(config['model_name'], device, prefix_length=config['prefix_len'], precision=precision,
-                      add_noise=False, input_dimension=config['dimension'])
+                      add_noise=False, input_dimension=config['dimension'], prefix_before_bos=before_bos,
+                      normalize=normalize, append_eos=append_eos)
 
     checkpoint = torch.load(config['checkpoint_path'], map_location=device)
     if not os.path.exists(config['model_name']) and not config['full_finetune']:
@@ -218,3 +229,38 @@ def model_from_json(json_file, device):
     learnable_parameters(decoder)
 
     return decoder
+
+
+if '__main__' == __name__:
+    from dataset.coco import COCOEmbeddings
+    from tqdm import tqdm
+    from torch.optim import AdamW
+    parser = argparse.ArgumentParser()
+
+    args = parser.parse_args()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger = logging.getLogger('captioning')
+    logging.basicConfig(level=logging.INFO)
+
+    # model
+    llama = 'meta-llama/Llama-3.2-1B'
+    opt = 'facebook/opt-350m'
+    decoder = Decoder(opt, device,
+                      prefix_length=10,
+                      input_dimension=768,
+                      normalize=True,
+                      append_eos=True,
+                      precision=torch.float16)
+
+    data = COCOEmbeddings('E:/embeddings/coco/dinov2_train.pkl')
+    loader = data.get_loader(batch_size=16, shuffle=False)
+    optim = AdamW(decoder.parameters(), lr=0.0001)
+    log_loss = []
+    for batch in tqdm(loader):
+        output = decoder(batch['image_embeddings'], batch['caption'])
+        loss = output.loss
+        loss.backward()
+        optim.step()
+        loss = loss.detach().cpu().item()
+        log_loss.append(loss)
+

@@ -1,6 +1,4 @@
 import argparse
-import pickle
-import random
 import logging
 import torch
 from tqdm import tqdm
@@ -11,11 +9,10 @@ import os
 import sys
 # path trick
 path = os.path.normpath(os.path.join(os.path.join(os.path.abspath(__file__)), '..', '..'))
-print(path)
 sys.path.append(path)
 from model.decoder import Decoder
 from model.encoder import Encoder
-from dataset.coco import CocoCaptions
+from dataset.coco import COCOCaptions, COCOEmbeddings
 from util import learnable_parameters
 
 
@@ -38,18 +35,24 @@ def train(args):
     dataset = getattr(args, 'dataset')
     frozen_encoder = getattr(args, 'frozen_encoder')
     dataset_root = getattr(args, 'dataset_root')
+    precomputed_embeddings = getattr(args, 'precomputed_embeddings')
+    no_eval = getattr(args, 'no_eval')
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info('model device {}'.format(device))
     # data
 
     if dataset == 'coco':
-        val_data = CocoCaptions(f'{dataset_root}/annotations/captions_val2017.json',
-                                  dataset_root,
-                                  'val')
-        train_data = CocoCaptions(f'{dataset_root}/annotations/captions_train2017.json',
-                                  dataset_root,
-                                  'train')
+        if precomputed_embeddings is None:
+            val_data = COCOCaptions(f'{dataset_root}/annotations/captions_val2017.json',
+                                    dataset_root,
+                                      'val')
+            train_data = COCOCaptions(f'{dataset_root}/annotations/captions_train2017.json',
+                                      dataset_root,
+                                      'train')
+        else:
+            train_data = COCOEmbeddings(precomputed_embeddings)
+            val_data = COCOEmbeddings(precomputed_embeddings.replace('train', 'val'))
 
     logging.debug('training dataset size: %d' % len(train_data))
     logging.debug('validation dataset size: %d' % len(val_data))
@@ -58,13 +61,17 @@ def train(args):
     val_loader = val_data.get_loader(batch_size=batch_size, shuffle=True)
 
     # model
-    encoder = Encoder(encoder_name, dataset, False)
+    if precomputed_embeddings is None:
+        encoder = Encoder(encoder_name, False, frozen_encoder, device)
+        dim = encoder.dim
+    else:
+        dim = train_data[0]['image_embeddings'].shape[1]
 
     decoder = Decoder(decoder_name, device,
                       prefix_length=prefix_len,
                       add_noise=add_noise,
                       variance=variance,
-                      input_dimension=encoder.dim,
+                      input_dimension=dim,
                       precision=torch.float32)
 
     if lora:
@@ -96,8 +103,12 @@ def train(args):
         for batch in tqdm(train_loader, total=len(train_loader), desc='Epoch {}'.format(epoch)):
             i += 1
             optim.zero_grad()
-            embeddings = encoder(batch['image'], trainable=frozen_encoder)
-            output = decoder(embeddings, batch['caption'])
+            if precomputed_embeddings is None:
+                embeddings = encoder(batch['image'])
+            else:
+                embeddings = batch['image_embeddings']
+
+            output = decoder(embeddings.to(device), batch['caption'])
             loss = output.loss
             loss.backward()
             optim.step()
@@ -109,27 +120,30 @@ def train(args):
                 logging.debug('Logging step {}'.format(i + 1))
                 # validation
                 log_val_losses = []
-                with torch.no_grad():
-                    # noise may be used during training
-                    decoder.add_noise = False
-                    for val_batch in val_loader:
-                        # validate using text embeddings in text only training
-                        flag = True if dataset == 'petro-txt' else False
-                        logging.debug(f'validation using text embedding? {flag}')
+                if not no_eval:
+                    with torch.no_grad():
+                        # noise may be used during training
+                        decoder.add_noise = False
+                        for val_batch in val_loader:
+                            # validate using text embeddings in text only training
+                            if precomputed_embeddings is None:
+                                embeddings = encoder(val_batch['image'])
+                            else:
+                                embeddings = val_batch['image_embeddings']
 
-                        with torch.no_grad():
-                            embeddings = encoder(val_batch['image'])
-                            val_output = decoder(embeddings, val_batch['caption'])
+                            val_output = decoder(embeddings.to(device), val_batch['caption'])
                             log_val_losses.append(val_output.loss.detach().cpu().item())
 
                 # save step loss and clean list
-                validation_losses.append(sum(log_val_losses) / len(log_val_losses))
+                if not no_eval:
+                    validation_losses.append(sum(log_val_losses) / len(log_val_losses))
+                    plt.plot(range(len(validation_losses)), validation_losses, label='validation')
+
                 training_losses.append(sum(log_loss) / len(log_loss))
                 log_loss = []
 
                 # plot and save loss history
                 plt.plot(range(len(training_losses)), training_losses, label='training')
-                plt.plot(range(len(validation_losses)), validation_losses, label='validation')
                 plt.legend()
                 plt.xlabel('step')
                 plt.ylabel('loss')
@@ -181,8 +195,10 @@ if __name__ == '__main__':
     parser.add_argument('--logging_steps', type=int, default=None, help='log step')
     parser.add_argument('--debug', action='store_true', help='debug mode', default=False)
     parser.add_argument('--dtype', type=str, default='fp32', choices=['fp32', 'fp16'], help='data type')
-    parser.add_argument('--frozen_encoder', action='store_true', help='frozen encoder', default=False)
-    parser.add_argument('--dataset_root', type=str, required=True)
+    parser.add_argument('--frozen_encoder', action='store_true', help='freeze encoder', default=False)
+    parser.add_argument('--dataset_root', type=str, help='path to dataset root folder')
+    parser.add_argument('--precomputed_embeddings', type=str, help='path to precomputed embeddings train file', default=None)
+    parser.add_argument('--no_eval', action='store_true', help='do not evaluate the model', default=False)
 
     args = parser.parse_args()
     logger = logging.getLogger('captioning')
@@ -194,8 +210,9 @@ if __name__ == '__main__':
 
     precision = torch.float16 if args.dtype == 'fp16' else torch.float32
     logging.debug(f'precision: {precision}')
-    cfg_path = os.path.join(args.decoder_name, 'adapter_config.json')
 
+    # check for previously trained checkpoint
+    cfg_path = os.path.join(args.decoder_name, 'adapter_config.json')
     if os.path.exists(cfg_path):
         logging.debug('decoder was adapted before locally')
         with open(cfg_path, 'rb') as f:
@@ -204,10 +221,11 @@ if __name__ == '__main__':
             args.alpha = cfg['lora_alpha']
             logging.debug(f'decoder rank: {args.rank} alpha: {args.alpha}')
 
-    train(args)
-
+    # save parameters
     result_dict = args.__dict__
-    result_dict['checkpoint_path'] = os.path.join(args.save_path, 'checkpoint.pt')
-    with open(f'{args.save_path}/experiment.json', 'w') as f:
+    result_dict['checkpoint_path'] = os.path.join(args.save_dir, 'checkpoint.pt')
+    with open(f'{args.save_dir}/experiment.json', 'w') as f:
         json.dump(result_dict, f, indent=2)
         logging.info(f'experiment saved')
+
+    train(args)
