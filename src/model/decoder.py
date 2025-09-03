@@ -19,7 +19,7 @@ logger = logging.getLogger('captioning')
 
 
 class Decoder(nn.Module):
-    def __init__(self, model_name, device, precision=torch.float16, prefix_length=10, add_noise=False, variance=0.016,
+    def __init__(self, model_name, precision=torch.float16, prefix_length=10, add_noise=False, variance=0.016,
                  input_dimension=768, normalize=False, prefix_before_bos=False, append_eos=False):
         super(Decoder, self).__init__()
         self.device = device
@@ -67,17 +67,12 @@ class Decoder(nn.Module):
         logging.debug(f'PAD token: {self.tokenizer.pad_token}')
         logging.debug(f'PAD token id: {self.tokenizer.pad_token_id}')
 
-        if self.device:
-            self.model.to(self.device)
-            self.mapper.to(self.device)
-
     def caption(self, embeddings, do_sample=False, max_tokens=200, seed=32, num_beams=1, top_k=None, top_p=None,
                 temperature=1.0, penalty_alpha=None, diversity_penalty=None):
         set_seed(seed)
         embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
 
         logging.debug(f'input embeddings shape:{embeddings.shape}')
-        embeddings = embeddings.to(self.device)
         patches = 4 if len(embeddings.shape) > 2 else 1
 
         logging.debug(f'reshaped embeddings shape:{embeddings.shape}')
@@ -88,7 +83,6 @@ class Decoder(nn.Module):
 
         # id do token de inicio de frase
         bos_token = torch.ones((1, 1)).to(dtype=torch.long) * self.tokenizer.bos_token_id
-        bos_token = bos_token.to(self.device)
         embeddings_layer = self.model.get_input_embeddings()
         bos_embeddings = embeddings_layer(bos_token)
 
@@ -96,7 +90,7 @@ class Decoder(nn.Module):
 
         # attention_mask = torch.ones((prefix.shape[0], prefix.shape[1])).to(self.device, dtype=torch.long)
         logging.debug(f'decoder input shape: {prefix.shape}')
-        attention_mask = torch.ones(prefix.shape[:2]).to(self.device, dtype=self.precision)
+        attention_mask = torch.ones(prefix.shape[:2])
         generated_ids = self.model.generate(do_sample=do_sample,
                                             max_new_tokens=max_tokens,
                                             inputs_embeds=prefix,
@@ -129,8 +123,7 @@ class Decoder(nn.Module):
 
         logging.debug(f'Mapper output: {prefix_tokens.shape}')
 
-        captions_emb = self.get_input_embeds(captions).to(dtype=self.fp, device=self.device)
-
+        captions_emb = self.get_input_embeds(captions)
         # print("bos ", captions_emb[:, :1, :].shape)
         logging.debug(f'captions embeddings shape: {captions_emb.shape}')
 
@@ -139,10 +132,10 @@ class Decoder(nn.Module):
             logging.debug(f' captions embeddings unsqueeze shape: {captions_emb.shape}')
 
         # final shape [batch, sos + prefix + caption len-1, d_model]
-        input_emb = torch.concat([captions_emb[:, :1, :], prefix_tokens, captions_emb[:, 1:, :]], dim=1).to(self.fp)
+        input_emb = torch.concat([captions_emb[:, :1, :], prefix_tokens, captions_emb[:, 1:, :]], dim=1)
 
         # labels for auto regressive CE training
-        labels = self.tokenizer(captions, return_tensors="pt", padding=True).input_ids.to(self.device, dtype=self.fp)
+        labels = self.tokenizer(captions, return_tensors="pt", padding=True).input_ids
 
         logging.debug(f'concatenated embeddings final shape: {input_emb.shape}')
         logging.debug('labels shape: {}'.format(labels.shape))
@@ -156,9 +149,6 @@ class Decoder(nn.Module):
         ignore = torch.ones(input_emb.shape[0],  ignore_size) * self.ignore_id
         logging.debug('ignore shape: {}'.format(ignore.shape))
 
-        labels = labels.to(self.device)
-        ignore = ignore.to(self.device)
-        input_emb = input_emb.to(self.device)
         # concatenate prefix labels (ignore) and text labels
         labels = torch.concat([labels[:, :1], ignore, labels[:, 1:]], dim=1)
 
@@ -166,22 +156,14 @@ class Decoder(nn.Module):
         return self.model(inputs_embeds=input_emb, labels=labels.to(torch.long))
 
     def get_input_embeds(self, text):
-        input_ids = self.tokenizer(text, return_tensors="pt", padding=True).input_ids.to(self.device).squeeze(0)
+        input_ids = self.tokenizer(text, return_tensors="pt", padding=True).input_ids.squeeze(0)
         embeddings_layer = self.model.get_input_embeddings()
         return embeddings_layer(input_ids)
 
     def _get_hidden_size(self):
         ids = self.tokenizer("prompt", return_tensors="pt").input_ids.squeeze(0)
         embeddings = self.model.get_input_embeddings()
-        if self.device:
-            ids = ids.to(self.device)
-            embeddings = embeddings.to(self.device)
-
         return embeddings(ids).shape[1]
-
-    def noise_injection(self, x, ):
-        x = x.to('cuda')
-        return x + torch.randn(x.shape, device='cuda', dtype=self.fp) * math.sqrt(self.variance)
 
     def lora_model(self, r, alpha, dropout):
         for param in self.model.parameters():
@@ -214,7 +196,7 @@ def model_from_json(json_file, device):
 
     normalize = config['normalize'] if 'normalize' in config else False
     # do not add noise during eval
-    decoder = Decoder(config['model_name'], device, prefix_length=config['prefix_len'], precision=precision,
+    decoder = Decoder(config['model_name'], prefix_length=config['prefix_len'], precision=precision,
                       add_noise=False, input_dimension=config['dimension'], prefix_before_bos=before_bos,
                       normalize=normalize, append_eos=append_eos)
 

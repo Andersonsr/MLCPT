@@ -41,3 +41,14 @@ def learnable_parameters(model):
             learnable += param.numel()
 
     return f'total params: {total / 1e6:.2f}M,  learnable params: {learnable / 1e6:.2f}M'
+
+
+if __name__ == '__main__':
+    long = [4, 3, 5, 2, 2, 2, 3,   3, 2, 3.5, 3, 3.5, 3.5,  2.5, 4,   4.5, 4, 2,   2.5]
+    lora = [3, 3, 4, 3, 2, 2, 3.5, 4, 3, 1,   3, 3,   4.25, 1,   3.5, 1,   2, 3.5, 3.5]
+    print(len(long), len(lora))
+    import numpy as np
+
+    print('long', np.mean(long), np.std(long))
+    print('lora', np.mean(lora), np.std(lora))
+

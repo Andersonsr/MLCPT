@@ -1,7 +1,7 @@
 #!/bin/bash
-
-python src/train/trainDecoder.py \
-    --epochs 5 \
+export USE_LIBUV=0
+torchrun --nnodes 1 --nproc_per_node 1 src/train/trainDecoder.py \
+    --epochs 1 \
     --batch_size 16 \
     --dataset coco \
     --save_dir checkpoints/dinov2-opt350m \
@@ -10,6 +10,7 @@ python src/train/trainDecoder.py \
     --lora \
     --lora_rank 16 \
     --lora_alpha 32 \
+    --debug \
 
 
 
