@@ -1,9 +1,9 @@
 import torch
 from torch import nn
-
+# removed 'No Finding'
 mimic_classifier_list = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema', 'Enlarged Cardiomediastinum',
                          'Fracture', 'Lung Lesion', 'Lung Opacity', 'Pleural Effusion', 'Pleural Other',
-                         'Pneumonia', 'Pneumothorax', 'Support Devices']
+                         'Pneumonia', 'Pneumothorax', 'Support Devices', 'No Findings']
 
 
 class LinearClassifier(nn.Module):
@@ -39,9 +39,8 @@ class MultiClassifier(nn.Module):
 
 
 if __name__ == '__main__':
-    classes = ['gato', 'cachorro', 'carro', 'avião']
-    model = MultiClassifier(classes, 768, 4)
-    input = torch.rand((16, 4, 768))
+    model = MultiClassifier(mimic_classifier_list, 896, 4)
+    input = torch.rand((16, 14, 896))
     output = model(input)
-    print(model)
+    print(output)
 

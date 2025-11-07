@@ -2,29 +2,33 @@ from torch import nn
 import torch
 
 
-def create_mapper(encoder_dim, decoder_dim, prefix_size):
-    modules = [nn.Linear(encoder_dim, (prefix_size * decoder_dim) // 2),
-               nn.GELU(),
-               nn.Linear((prefix_size * decoder_dim) // 2, prefix_size * decoder_dim)]
-    return nn.Sequential(*modules)
-
-
-class CapinchoMapper(nn.Module):
-    def __init__(self, input_size, token_length, output_n):
-        super(CapinchoMapper, self).__init__()
-        self._tied_weights_keys = None
-        self.model = nn.Sequential(
-            nn.Linear(input_size, (token_length * output_n) // 2),
-            nn.LeakyReLU(),
-            nn.Linear((token_length * output_n) // 2, (token_length * output_n)),
-            nn.LeakyReLU())
+class Mapper(nn.Module):
+    def __init__(self, input_dim, output_dim, k):
+        super().__init__()
+        self.k = k
+        self.output_dim = output_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, output_dim * k * 2),
+            nn.GELU(),
+            nn.Linear(output_dim * k * 2, output_dim * k),
+        )
 
     def forward(self, x):
-        return self.model(x)
+        _x = self.mlp(x)
+        return _x.view(x.shape[0], self.k, self.output_dim)
 
 
-if __name__ == '__main__':
-    model = create_mapper(768, 512, 10)
-    x = torch.randn(4, 768)
-    x = model.forward(x)
-    print(x.shape)
+class Projector(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, output_dim * 2),
+            nn.GELU(),
+            nn.Linear(output_dim * 2, output_dim),
+        )
+
+    def forward(self, x):
+        return self.mlp(x)
+
+
+
