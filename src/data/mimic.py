@@ -45,6 +45,9 @@ class MimicDataset(torch.utils.data.Dataset):
                 'study': study,
                 'image_filename': image_name}
 
+# datasets/mimic/train_split.json
+# datasets/mimic/images/512
+
     def collate_fn(self, batch):
         data = {}
 
