@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 import json
 import numpy as np
@@ -41,9 +43,16 @@ def balance_weights(json_file, class_list, number_of_classes):
 
 
 if __name__ == '__main__':
-    json_file = 'E:\\datasets\\mimic\\preprocess\\train_split.json'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--json', type=str, default='E:\\datasets\\mimic\\preprocess\\train_split.json')
+    parser.add_argument('--root', type=str, default='E:\\datasets\\mimic\\mimic-cxr-jpg\\2.1.0\\files')
+    args = parser.parse_args()
+
+    json_file = args.json
+    root = args.root
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = MimicDataset('E:\\datasets\\mimic\\mimic-cxr-jpg\\2.1.0\\files', json_file, zeroed=True)
+    dataset = MimicDataset(root, json_file, zeroed=True)
     loader = dataset.get_loader(32)
 
     classification_head = MultiClassifier(mimic_classifier_list, 1024, 4).to(device)

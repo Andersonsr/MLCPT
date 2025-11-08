@@ -20,6 +20,7 @@ class MimicDataset(torch.utils.data.Dataset):
         self.root = root_dir
         self.data = json.load(open(json_file, 'r'))
         self.zeroed = zeroed
+        self.mimic_folders = 'mimic-cxr-jpg' in self.root
 
     def __len__(self):
         return len(self.data)
@@ -29,7 +30,12 @@ class MimicDataset(torch.utils.data.Dataset):
         folder = self.data[i]['patient'][:3]
         study = self.data[i]['study']
         image_name = self.data[i]['image_name']
-        image = Image.open(os.path.join(self.root, folder, patient, study, image_name)).convert('RGB')
+
+        if self.mimic_folders:
+            image = Image.open(os.path.join(self.root, folder, patient, study, image_name)).convert('RGB')
+
+        else:
+            image = Image.open(os.path.join(self.root, self.data[i]['imag_name'])).convert('RGB')
 
         return {'id': self.data[i]['id'],
                 'findings': self.data[i]['findings'],
