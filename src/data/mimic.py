@@ -35,7 +35,7 @@ class MimicDataset(torch.utils.data.Dataset):
             image = Image.open(os.path.join(self.root, folder, patient, study, image_name)).convert('RGB')
 
         else:
-            image = Image.open(os.path.join(self.root, self.data[i]['imag_name'])).convert('RGB')
+            image = Image.open(os.path.join(self.root, self.data[i]['image_name'])).convert('RGB')
 
         return {'id': self.data[i]['id'],
                 'findings': self.data[i]['findings'],

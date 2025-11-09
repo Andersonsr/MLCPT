@@ -52,7 +52,21 @@ class DINOv3(torch.nn.Module):
         inputs = torch.stack(image_tensors, dim=0).to(self.model.device)
         with torch.no_grad():
             feats = self.model(inputs)
-            x = feats.last_hidden_state[0, 5:, :]
+            x = feats.last_hidden_state[:, 5:, :]
             cls = feats.pooler_output
             return {'classification': cls, 'patches': x}
+
+
+if __name__ == '__main__':
+    from PIL import Image
+    from classification_head import Attention
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    encoder = DINOv3().to(device)
+    im = Image.open('D:\\mimic\\preprocess\\512\\0000c2f5-f02f9f3c-1ed14642-958de0ad-d6ce4d20.jpg').convert('RGB')
+    output = encoder.get_features([im, im])
+    print(output['patches'].shape)
+    attention = Attention(num_queries=14, embedding_dim=1024).to(device)
+    output = attention(output['patches'])
+    print(output['attn_output'].shape, output['attn_output_weights'].shape)
 

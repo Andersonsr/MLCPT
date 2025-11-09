@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+
 # removed 'No Finding'
 mimic_classifier_list = ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema', 'Enlarged Cardiomediastinum',
                          'Fracture', 'Lung Lesion', 'Lung Opacity', 'Pleural Effusion', 'Pleural Other',
@@ -36,6 +37,19 @@ class MultiClassifier(nn.Module):
                 # print(x[:, i, :].shape)
                 y[name] = module(x[:, i, :])
             return y
+
+
+class Attention(nn.Module):
+    def __init__(self, num_queries, embedding_dim):
+        super(Attention, self).__init__()
+        self.queries = torch.nn.Parameter(torch.rand(1, num_queries, embedding_dim))
+        self.attention = nn.MultiheadAttention(embedding_dim, num_heads=8, add_bias_kv=True, batch_first=True)
+
+    def forward(self, x):
+        batch_size, num_patches, embedding_dim = x.shape
+        queries = self.queries.expand(batch_size, -1, -1)
+        attn_output, attn_output_weights = self.attention(queries, x, x)
+        return {'attn_output': attn_output, 'attn_output_weights': attn_output_weights}
 
 
 if __name__ == '__main__':
